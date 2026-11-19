@@ -19,7 +19,7 @@ You still play with mouse/keyboard or a gamepad. The controllers are for pointin
 
 | | |
 |---|---|
-| Game | *Trails in the Sky 1st Chapter* for PC, version **1.06.1** (Steam). Other versions may not work: SoraVR checks the game code and switches features off if it doesn't recognise it. |
+| Game | *Trails in the Sky 1st Chapter* for PC (Steam), tested with versions **1.06.1** and **1.07**. SoraVR finds the game code it needs by itself, so small updates usually keep working; if it doesn't recognise something, it switches only that feature off and says so in the log. |
 | VR | A PC VR headset with an **OpenXR** runtime. Tested: Windows Mixed Reality headset through **SteamVR** (SteamVR as the OpenXR runtime). |
 | Files | `d3d11.dll` (SoraVR), `SoraVR.default.ini`, `LICENSE-OpenXR.txt` and this README from the SoraVR package, plus **`openxr_loader.dll`**, the standard OpenXR loader from the Khronos OpenXR SDK (Apache 2.0). If you used FDK_vr before, its `openxr_loader.dll` works. |
 | PC | A strong GPU. Both eyes are rendered every frame, so expect roughly half your normal frame rate. Lower the game's render scale if it's too slow. |
@@ -39,7 +39,8 @@ You still play with mouse/keyboard or a gamepad. The controllers are for pointin
 ## 3. Recommended game settings
 
 In the game's graphics options:
-- **Light rays: off.** The window light rays don't line up between the eyes.
+- **Volumetric lighting: off.** The light shafts don't line up between the eyes.
+- **DLSS / FSR: off** (game 1.07+). They reuse the previous frame, and SoraVR renders the eyes one after the other, so leftovers of one eye's picture stay visible in the other.
 - **Anti-aliasing / TAA: off** is recommended (sharper in the headset).
 - **Render scale:** as high as your PC allows (tested at 200%). Lower it if the frame rate is too low.
 
@@ -118,7 +119,7 @@ SoraVR writes **`SoraVR.log`** next to `sora_1st.exe` every time the game runs. 
 | Things pop in at the edges of the view | **F3** for a wider field of view. |
 | Too slow | Lower the game's render scale, or press **F9** for the faster alternate-eye mode (less comfortable). |
 | The game crashes at startup | It happened occasionally in testing; start it again. If it keeps happening, send `SoraVR.log`: its last lines show where it crashed. |
-| A feature says "game version not recognised" in the log | Your game version differs from 1.06.1. That feature stays off so nothing breaks. |
+| A feature says "not recognised" in the log | Your game version changed that part of the game code. That feature stays off so nothing breaks; please report it with the log. |
 | Something floats in front of you instead of sitting in the world (a label, marker or effect that follows your head) | It's drawn by a shader SoraVR doesn't correct yet. You can find it and send it in, see *Reporting a floating element* below. |
 
 ### Reporting a floating element
@@ -133,7 +134,8 @@ SoraVR has "shader hunting" keys for finding which shader draws something:
 
 ## 8. Known issues
 
-- **Light rays** (sunlight shafts through windows, also in caves and inside buildings) don't match between the eyes: turn *light rays* off in the game's settings.
+- **Volumetric lighting** (light shafts through windows, also in caves and inside buildings) doesn't match between the eyes: turn *volumetric lighting* off in the game's settings.
+- **DLSS and FSR** (game 1.07+) leave ghost images of the other eye: keep them off.
 - **Objects can disappear at the edges of the view in some scenes.** The game skips drawing things it thinks are off-screen, based on its own camera. In scenes where the game uses its own special camera (some cutscenes), SoraVR's wider field of view can't reach the game's visibility check, so objects near the edges of the headset view may pop in and out.
 - **The title screen** is flat. It's shown as a big screen behind the menu panel, because the game doesn't render it as a 3D scene.
 - The controllers don't act as a gamepad yet (planned for v1.1).

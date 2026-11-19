@@ -14,6 +14,7 @@ Add a line under *Unreleased* with every fix or pull request (with its number an
   by their code instead of their hash, and the replacements adapt to the game's data layout. Fixes
   floating labels/markers and too-thick outlines on 1.07. `tools/shaderprint.py` fingerprints a
   hunting dump.
+- README: volumetric lighting named correctly; DLSS/FSR (game 1.07) should be off; tested game versions.
 
 ## [1.0-rc2] – 2026-11-19
 
