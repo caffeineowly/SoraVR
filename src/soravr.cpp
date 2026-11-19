@@ -14,6 +14,7 @@
 #include <windows.h>
 #include <d3d11_1.h>
 #include <d3dcompiler.h>
+#include <d3d11shader.h>
 #include <dxgi1_2.h>
 #include <cmath>
 #include <cstdio>
@@ -1052,9 +1053,104 @@ static int g_hashVariant = -1;            // which FNV variant matched the HUD l
 static int g_vsCreated = 0, g_hudVsFound = 0;
 static std::map<uint64_t, std::vector<uint8_t>> g_vsCode;   // bytecode by hash (for disassembly dumps)
 
-static void RegisterShader(void* sh, const void* code, SIZE_T len, bool vertex) {
+// ---- version-independent shader identity ----
+// Game updates recompile the shaders (new hashes) and can change their data layout (1.07 added
+// prevWorld to the instance record: 128 -> 192 bytes). The shaders SoraVR replaces or watches are
+// recognised by their code instead and then carry their 1.06.1 hash as a canonical name, so every
+// hash list (and the ini) keeps working. Vertex shaders: fingerprint of the disassembly with the
+// numbers on structured-buffer lines blanked (tools/shaderprint.py computes it from a hunting dump).
+// The outline pixel shader: by its declared resources (outlinePrepareTexture, cb_local.offsetsAndWeights).
+struct KnownShader { uint64_t print, canon; const char* what; };
+static const KnownShader kKnownVS[] = {
+    { 0xd3c01e02979150b0ull, 0xf006f8946dc6d3c4ull, "world label shader 1" },
+    { 0x889fb9ac5d71285bull, 0x6ab95c20c50948e5ull, "world label shader 2" },
+    { 0x0836fae6a6063bb8ull, 0x4976a4a4235db4a9ull, "2D sprite shader" },
+};
+static const uint64_t kOutlinePSCanon = 0xe49978a78bd4be0eull;
+typedef HRESULT (WINAPI* PFN_D3DReflectT)(LPCVOID, SIZE_T, REFIID, void**);
+static HMODULE D3DCompilerDll() { static HMODULE m = LoadLibraryA("d3dcompiler_47.dll"); return m; }
+static bool HasBytes(const void* code, size_t len, const char* s) {
+    size_t n = strlen(s); const char* b = (const char*)code;
+    for (size_t i = 0; i + n <= len; i++) if (b[i] == s[0] && !memcmp(b + i, s, n)) return true;
+    return false;
+}
+static uint64_t ShaderPrint(const void* code, size_t len) {
+    static pD3DDisassemble dis = D3DCompilerDll() ? (pD3DDisassemble)GetProcAddress(D3DCompilerDll(), "D3DDisassemble") : nullptr;
+    ID3DBlob* blob = nullptr;
+    if (!dis || FAILED(dis(code, len, 0, nullptr, &blob)) || !blob) return 0;
+    const char* t = (const char*)blob->GetBufferPointer(); size_t tn = strnlen(t, blob->GetBufferSize());
+    uint64_t h = 0xcbf29ce484222325ull; bool first = true;
+    auto feed = [&](char c) { h ^= (uint8_t)c; h *= 0x100000001b3ull; };
+    for (size_t i = 0; i < tn; ) {
+        size_t e = i; while (e < tn && t[e] != '\n') e++;
+        std::string line(t + i, e - i); i = e + 1;
+        while (!line.empty() && (line.back() == '\r' || line.back() == ' ' || line.back() == '\t')) line.pop_back();
+        size_t a = line.find_first_not_of(" \t");
+        if (a == std::string::npos || !line.compare(a, 2, "//")) continue;
+        bool numb = !line.compare(a, 13, "ld_structured") || !line.compare(a, 23, "dcl_resource_structured");
+        if (!first) feed('\n');
+        first = false;
+        for (size_t k = 0; k < line.size(); k++) {
+            if (numb && line[k] >= '0' && line[k] <= '9') { while (k + 1 < line.size() && line[k + 1] >= '0' && line[k + 1] <= '9') k++; feed('#'); }
+            else feed(line[k]);
+        }
+    }
+    blob->Release();
+    return h;
+}
+static ID3D11ShaderReflection* Reflect(const void* code, size_t len) {
+    static PFN_D3DReflectT refl = D3DCompilerDll() ? (PFN_D3DReflectT)GetProcAddress(D3DCompilerDll(), "D3DReflect") : nullptr;
+    ID3D11ShaderReflection* r = nullptr;
+    static const GUID kIID = { 0x8d536ca1, 0x0cca, 0x4956, { 0xa8, 0x37, 0x78, 0x69, 0x63, 0x75, 0x55, 0x84 } };   // IID_ID3D11ShaderReflection (d3dcompiler_47)
+    if (!refl || FAILED(refl(code, len, kIID, (void**)&r))) return nullptr;
+    return r;
+}
+static bool IsOutlinePSCode(const void* code, size_t len) {
+    if (!HasBytes(code, len, "outlinePrepareTexture") || !HasBytes(code, len, "offsetsAndWeights")) return false;
+    ID3D11ShaderReflection* r = Reflect(code, len);
+    if (!r) return false;
+    bool ok = false;
+    D3D11_SHADER_INPUT_BIND_DESC bd;
+    if (SUCCEEDED(r->GetResourceBindingDescByName("cb_local", &bd)) && bd.Type == D3D_SIT_CBUFFER && bd.BindPoint == 2) {
+        D3D11_SHADER_VARIABLE_DESC vd;
+        ID3D11ShaderReflectionConstantBuffer* cb = r->GetConstantBufferByName("cb_local");
+        if (cb && SUCCEEDED(cb->GetVariableByName("offsetsAndWeights")->GetDesc(&vd)) && vd.StartOffset == 64 && vd.Size >= 128) ok = true;
+    }
+    r->Release();
+    return ok;
+}
+// Bytes between the instance record's world matrix and its colour (0 in 1.06.1, 64 in 1.07), or -1
+// if the record isn't laid out as the replacement shaders expect (then they're not used).
+static int InstanceExtraBytes(const void* code, size_t len) {
+    ID3D11ShaderReflection* r = Reflect(code, len);
+    if (!r) return -1;
+    int extra = -1;
+    ID3D11ShaderReflectionConstantBuffer* cb = r->GetConstantBufferByName("instances_g");
+    ID3D11ShaderReflectionType* el = cb ? cb->GetVariableByIndex(0)->GetType() : nullptr;
+    D3D11_SHADER_TYPE_DESC w, c, u, p, b, q;
+    if (el && SUCCEEDED(el->GetMemberTypeByName("world")->GetDesc(&w)) && SUCCEEDED(el->GetMemberTypeByName("color")->GetDesc(&c)) &&
+        SUCCEEDED(el->GetMemberTypeByName("uv")->GetDesc(&u)) && SUCCEEDED(el->GetMemberTypeByName("param")->GetDesc(&p)) &&
+        SUCCEEDED(el->GetMemberTypeByName("boneAddress")->GetDesc(&b)) && SUCCEEDED(el->GetMemberTypeByName("param2")->GetDesc(&q)) &&
+        w.Offset == 0 && c.Offset >= 64 && (c.Offset - 64) % 16 == 0 &&
+        u.Offset == c.Offset + 16 && p.Offset == c.Offset + 32 && b.Offset == c.Offset + 48 && q.Offset == c.Offset + 52)
+        extra = (int)c.Offset - 64;
+    r->Release();
+    return extra;
+}
+
+static uint64_t RegisterShader(void* sh, const void* code, SIZE_T len, bool vertex) {
     ShaderInfo si{};
     for (int v = 0; v < 3; v++) si.h[v] = Fnv(code, len, v);
+    {   uint64_t canon = 0; const char* what = nullptr;
+        if (vertex && HasBytes(code, len, "instances_g")) {
+            uint64_t p = ShaderPrint(code, len);
+            for (const KnownShader& k : kKnownVS) if (p == k.print) { canon = k.canon; what = k.what; }
+        } else if (!vertex && IsOutlinePSCode(code, len)) { canon = kOutlinePSCanon; what = "outline (deferred lighting) shader"; }
+        if (canon) {
+            if (si.h[0] != canon) Log("shader %016llx recognised by its code as the %s (%016llx in 1.06.1)", (unsigned long long)si.h[0], what, (unsigned long long)canon);
+            for (int v = 0; v < 3; v++) si.h[v] = canon;
+        }
+    }
     si.hud = false;
     if (vertex) {
         for (int v = 0; v < 3; v++)
@@ -1067,6 +1163,7 @@ static void RegisterShader(void* sh, const void* code, SIZE_T len, bool vertex) 
     std::lock_guard<std::mutex> lk(g_shMx);
     g_shaders[sh] = si;
     if (vertex) { g_vsCreated++; if (si.hud) g_hudVsFound++; g_vsCode[si.h[0]].assign((const uint8_t*)code, (const uint8_t*)code + len); }
+    return si.h[0];
 }
 static uint64_t ShaderHash(void* sh) {
     std::lock_guard<std::mutex> lk(g_shMx);
@@ -1588,7 +1685,7 @@ static const char* kBillboardHlsl = R"HLSL(
 cbuffer cb_instance : register(b1) { int instanceOffset_g; };
 cbuffer SoraVRFix : register(b13) { float4 K0; float4 K1; float4 K2; float4 K3; };
 struct UICameraParam { float4 pi0; float4 pi1; float4 pi2; float4 pi3; float2 screenScale; };
-struct InstanceParam { float4 w0; float4 w1; float4 w2; float4 w3; float4 color; float4 uv; float4 param; uint boneAddress; float3 param2; };
+struct InstanceParam { float4 w0; float4 w1; float4 w2; float4 w3; INSTANCE_EXTRA float4 color; float4 uv; float4 param; uint boneAddress; float3 param2; };
 StructuredBuffer<UICameraParam> uiCameras_g : register(t2);
 StructuredBuffer<InstanceParam> instances_g : register(t15);
 struct VSOut {
@@ -1629,7 +1726,7 @@ static const char* kBillboardHlsl2 = R"HLSL(
 cbuffer cb_instance : register(b1) { int instanceOffset_g; };
 cbuffer SoraVRFix : register(b13) { float4 K0; float4 K1; float4 K2; float4 K3; };
 struct UICameraParam { float4 pi0; float4 pi1; float4 pi2; float4 pi3; float2 screenScale; };
-struct InstanceParam { float4 w0; float4 w1; float4 w2; float4 w3; float4 color; float4 uv; float4 param; uint boneAddress; float3 param2; };
+struct InstanceParam { float4 w0; float4 w1; float4 w2; float4 w3; INSTANCE_EXTRA float4 color; float4 uv; float4 param; uint boneAddress; float3 param2; };
 StructuredBuffer<UICameraParam> uiCameras_g : register(t2);
 StructuredBuffer<InstanceParam> instances_g : register(t15);
 struct VSOut {
@@ -1676,7 +1773,7 @@ VSOut main(float3 p : POSITION, float2 uv : TEXCOORD0, uint iid : SV_InstanceID)
 static const uint64_t kSpriteVS = 0x4976a4a4235db4a9ull;
 static const char* kSpriteHlsl = R"HLSL(
 cbuffer cb_instance : register(b1) { int instanceOffset_g; };
-struct InstanceParam { float4 w0; float4 w1; float4 w2; float4 w3; float4 color; float4 uv; float4 param; uint boneAddress; float3 param2; };
+struct InstanceParam { float4 w0; float4 w1; float4 w2; float4 w3; INSTANCE_EXTRA float4 color; float4 uv; float4 param; uint boneAddress; float3 param2; };
 StructuredBuffer<InstanceParam> instances_g : register(t15);
 struct VSOut {
     float4 pos : SV_Position;
@@ -1766,8 +1863,13 @@ static ID3D11VertexShader* CompileBillboard(ID3D11Device* d, const char* hlsl, c
     static pD3DCompile compile = nullptr;
     if (!compile) { HMODULE m = LoadLibraryA("d3dcompiler_47.dll"); if (m) compile = (pD3DCompile)GetProcAddress(m, "D3DCompile"); }
     if (!compile) { Log("billboard fix: d3dcompiler_47.dll not available"); return nullptr; }
+    int extra = InstanceExtraBytes(origCode, origLen);
+    if (extra < 0) { Log("billboard fix: the game's instance data layout is not the expected one - keeping the original shader"); return nullptr; }
+    char extraDecl[64] = " ";
+    if (extra) snprintf(extraDecl, sizeof extraDecl, "float4 extra_[%d];", extra / 16);
+    D3D_SHADER_MACRO macros[] = { { "INSTANCE_EXTRA", extraDecl }, { nullptr, nullptr } };
     ID3DBlob *code = nullptr, *err = nullptr;
-    HRESULT hr = compile(hlsl, strlen(hlsl), "soravr_billboard", nullptr, nullptr, "main", "vs_5_0",
+    HRESULT hr = compile(hlsl, strlen(hlsl), "soravr_billboard", macros, nullptr, "main", "vs_5_0",
                          D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &code, &err);
     if (FAILED(hr) || !code) {
         Log("billboard fix: compile FAILED: %s", err ? (const char*)err->GetBufferPointer() : "(no message)");
@@ -1817,8 +1919,7 @@ static void* BillboardSwap(ID3D11DeviceContext* c, void* sh) {
 static HRESULT STDMETHODCALLTYPE Hook_CreateVS(ID3D11Device* d, const void* code, SIZE_T len, ID3D11ClassLinkage* cl, ID3D11VertexShader** out) {
     HRESULT hr = o_CreateVS(d, code, len, cl, out);
     if (SUCCEEDED(hr) && out && *out && code) {
-        RegisterShader(*out, code, len, true);
-        uint64_t h = Fnv(code, len, 0);
+        uint64_t h = RegisterShader(*out, code, len, true);    // canonical (1.06.1) hash for the shaders SoraVR knows
         const char* hlsl = BillboardHlslFor(h);
         if (std::find(g_billboardVs.begin(), g_billboardVs.end(), h) != g_billboardVs.end() && !hlsl)
             Log("billboard fix: %016llx is listed but there is no replacement for it yet", (unsigned long long)h);

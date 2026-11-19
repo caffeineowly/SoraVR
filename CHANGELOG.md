@@ -10,6 +10,10 @@ Add a line under *Unreleased* with every fix or pull request (with its number an
   versions 1.06.1 and 1.07 (and should survive small updates). `tools/sigcheck.py` checks the
   signatures against any `sora_1st.exe`.
 - The log names the game build and where each patched piece of game code was found.
+- Shaders SoraVR replaces or watches (world labels, letterbox sprites, toon outlines) are recognised
+  by their code instead of their hash, and the replacements adapt to the game's data layout. Fixes
+  floating labels/markers and too-thick outlines on 1.07. `tools/shaderprint.py` fingerprints a
+  hunting dump.
 
 ## [1.0-rc2] – 2026-11-19
 
