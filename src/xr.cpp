@@ -108,7 +108,7 @@ const char* R(XrResult r) {
 bool LoadLoader() {
     if (g_loader) return true;
     g_loader = LoadLibraryA("openxr_loader.dll");
-    if (!g_loader) { Log("XR: openxr_loader.dll not found next to the game exe (copy it from FDK_vr)"); return false; }
+    if (!g_loader) { Log("XR: openxr_loader.dll not found next to the game exe - copy it there (Khronos OpenXR loader, see README) - no VR output"); return false; }
     p_xrGetInstanceProcAddr = (PFN_xrGetInstanceProcAddr)GetProcAddress(g_loader, "xrGetInstanceProcAddr");
     if (!p_xrGetInstanceProcAddr) { Log("XR: xrGetInstanceProcAddr missing in openxr_loader.dll"); return false; }
     p_xrGetInstanceProcAddr(XR_NULL_HANDLE, "xrCreateInstance", (PFN_xrVoidFunction*)&p_xrCreateInstance);
