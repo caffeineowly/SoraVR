@@ -1,0 +1,16 @@
+# build output (rebuild with ./build.sh)
+*.dll
+*.exe
+*.pdb
+bin/
+build/
+
+# logs contain local install paths
+*.log
+logs/
+
+# editor / OS clutter
+*.bak
+*.swp
+.DS_Store
+Thumbs.db
