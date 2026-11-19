@@ -257,6 +257,8 @@ static PFN_CreateDeviceAndSwapChain g_realCreateDeviceAndSwapChain = nullptr;
 static std::once_flag               g_initOnce;
 
 static void InstallCrashLogger();
+struct GameAddrs;
+static const GameAddrs& Game();
 static void Init() {
     std::call_once(g_initOnce, [] {
         GetModuleFileNameA(nullptr, g_dir, MAX_PATH);
@@ -264,7 +266,7 @@ static void Init() {
         snprintf(g_ini, sizeof g_ini, "%sSoraVR.ini", g_dir);
         std::string logPath = std::string(g_dir) + "SoraVR.log";
         g_log = fopen(logPath.c_str(), "w");
-        Log("SoraVR v1.0-rc2 (renamed from SkyStereo)");
+        Log("SoraVR v1.0-rc3 (game code found by signatures: 1.06.1 and 1.07)");
         InstallCrashLogger();
         {   // the mod was called SkyStereo until v1.0-rc2: keep the user's settings
             char old[MAX_PATH]; snprintf(old, sizeof old, "%sSkyStereo.ini", g_dir);
@@ -276,6 +278,7 @@ static void Init() {
         WriteDefaultIniIfMissing();
         LoadConfig();
         Log("config: enabled=%d mode=%d separation=%.4f", g_cfg.enabled, g_cfg.mode, g_cfg.separation);
+        Game();                                        // find the game code to patch (logs what it found)
 
         char sys[MAX_PATH];
         GetSystemDirectoryA(sys, MAX_PATH);
@@ -2661,18 +2664,122 @@ static void ApplyPointer() {
     if (wantR != downR) { SendMouse(wantR ? MOUSEEVENTF_RIGHTDOWN : MOUSEEVENTF_RIGHTUP); downR = wantR; }
 }
 
+// ---- game code signatures ----
+// The game is patched at a few places in its code. Instead of fixed addresses (which move with every
+// game update) each place is found by a byte pattern ("??" = any byte: addresses and offsets that
+// differ between builds) that must match exactly once in the exe's code. Checked offline against
+// 1.06.1 and 1.07 with tools/sigcheck.py, which reads the patterns from this file (keep the format).
+static const char kSigGameObj[]  = "48 8b 35 ?? ?? ?? ?? 48 8b ce e8 ?? ?? ?? ?? 40 38 ae b8 00 00 00 75 10";   // mov rsi,[game object A] (frame loop)
+static const char kSigRenderCall[] = "48 8b 06 48 8b ce ff 50 60 8b c5 86 83 ?? 00 00 00 48 8b 8b ?? 00 00 00"; // call [rax+60h] = render (vtable slot 12)
+static const char kSigMenuEarly[] = "49 8b 8e ?? ?? 00 00 48 8b 41 10 f3 44 0f 10 ?? ?? ?? ?? ?? 80 78 43 00 0f 84 ?? ?? ?? ?? f3 0f 10 81 c4 00 00 00 41 0f 2f"; // capture valid -> draw only the capture
+static const char kSigMenuLate[]  = "f3 0f 10 81 c4 00 00 00 41 0f 2f ?? 76 ?? 48 8b 41 10 80 78 43 00 74";   // blend > 0 -> composite the capture
+static const char kSigTitleR[]    = "48 8b 1d ?? ?? ?? ?? 4c 89 ac 24 e0 00 00 00 0f 29 b4 24 90 00 00 00 0f 29 bc 24 80 00 00 00 0f b6 83 a5 1b 00 00 84 c0 0f 84 ?? ?? ?? ??"; // mov rbx,[game object B]; "draw world" byte reader (render)
+static const char kSigTitleP[]    = "0f b6 86 a5 1b 00 00 48 8b 8e 98 06 00 00 84 c0 75 ??";                 // "draw world" byte reader (prepare)
+static const char kSigPhys1[]     = "4c 8b 8f d0 01 00 00 4d 8b c6 0f 28 ce e8 ?? ?? ?? ?? 48 83 c3 08 48 3b de 0f 85";       // call DynamicBone chain update
+static const char kSigPhys2[]     = "4c 8b 8f d0 01 00 00 4d 8b c6 48 8b 0b 0f 28 ce e8 ?? ?? ?? ?? 48 83 c3 08 48 3b de 75"; // call DynamicBone chain update
+
+static uintptr_t SigFind(const char* name, const char* pat) {
+    uint8_t b[128]; bool any[128]; int n = 0;
+    for (const char* s = pat; *s && n < 128; ) {
+        while (*s == ' ') s++;
+        if (!*s) break;
+        if (s[0] == '?') { any[n] = true; b[n++] = 0; s += 2; continue; }
+        any[n] = false; b[n++] = (uint8_t)strtoul(std::string(s, 2).c_str(), nullptr, 16); s += 2;
+    }
+    uintptr_t exe = (uintptr_t)GetModuleHandleA(nullptr);
+    auto* nt = (IMAGE_NT_HEADERS*)(exe + ((IMAGE_DOS_HEADER*)exe)->e_lfanew);
+    IMAGE_SECTION_HEADER* sec = IMAGE_FIRST_SECTION(nt);
+    uintptr_t hit = 0; int count = 0;
+    for (int i = 0; i < nt->FileHeader.NumberOfSections; i++, sec++) {
+        if (!(sec->Characteristics & IMAGE_SCN_MEM_EXECUTE)) continue;
+        const uint8_t* p = (const uint8_t*)(exe + sec->VirtualAddress);
+        size_t len = sec->Misc.VirtualSize;
+        for (size_t o = 0; o + n <= len; o++) {
+            if (p[o] != b[0]) continue;
+            int k = 1;
+            while (k < n && (any[k] || p[o + k] == b[k])) k++;
+            if (k == n) { if (!count++) hit = (uintptr_t)(p + o); }
+        }
+    }
+    if (count != 1) { Log("game code: '%s' %s (%d matches) - this game version is not recognised there", name, count ? "ambiguous" : "not found", count); return 0; }
+    return hit;
+}
+static uintptr_t RipTarget(uintptr_t insn, int dispAt, int len) { return insn + len + *(int32_t*)(insn + dispAt); }
+
+// Everything the mod patches or reads in the game, resolved once at startup (before any patch).
+struct GameAddrs {
+    uintptr_t objA = 0;           // global: game object A (vtable slot 12 = render), was exe+905870
+    uintptr_t objB = 0;           // global: game object B (+0x698 scene renderer, +0x1ba5 "draw world"), was exe+908db8
+    uint32_t captureOff = 0;      // scene renderer -> screen-capture object (0x8b8 in 1.06.1, 0x910 in 1.07)
+    uintptr_t menuEarly = 0, menuLate = 0;     // menu patches (je / jbe)
+    uint8_t earlyOrig[6], earlyPatch[6], lateOrig[2], latePatch[2];
+    uintptr_t titleR = 0, titleP = 0;          // title patches (je / jne)
+    uint8_t trOrig[6], trPatch[6], tpOrig[2], tpPatch[2];
+    uintptr_t phys[2] = { 0, 0 }, physTarget = 0;
+};
+static GameAddrs g_ga;
+static BOOL CALLBACK ResolveGameOnce(PINIT_ONCE, PVOID, PVOID*) {
+    uintptr_t exe = (uintptr_t)GetModuleHandleA(nullptr);
+    GameAddrs& g = g_ga;
+    {   auto* nt = (IMAGE_NT_HEADERS*)(exe + ((IMAGE_DOS_HEADER*)exe)->e_lfanew);
+        Log("game exe: build stamp %08lx, image size 0x%lx", (unsigned long)nt->FileHeader.TimeDateStamp, (unsigned long)nt->OptionalHeader.SizeOfImage); }
+    if (uintptr_t m = SigFind("render: game object", kSigGameObj)) {
+        uintptr_t c = SigFind("render: render call", kSigRenderCall);
+        if (c > m && c - m < 0x200) g.objA = RipTarget(m, 3, 7);
+        else if (c) Log("game code: render call not next to the game object load - not recognised");
+    }
+    if (uintptr_t m = SigFind("menus: early exit", kSigMenuEarly)) {
+        g.captureOff = *(uint32_t*)(m + 3);
+        g.menuEarly = m + 24;
+        memcpy(g.earlyOrig, (void*)g.menuEarly, 6);                    // je rel32 -> jmp rel32+1; nop (same target)
+        g.earlyPatch[0] = 0xe9; *(int32_t*)(g.earlyPatch + 1) = *(int32_t*)(g.menuEarly + 2) + 1; g.earlyPatch[5] = 0x90;
+    }
+    if (uintptr_t m = SigFind("menus: late composite", kSigMenuLate)) {
+        g.menuLate = m + 12;
+        memcpy(g.lateOrig, (void*)g.menuLate, 2);                      // jbe -> jmp
+        g.latePatch[0] = 0xeb; g.latePatch[1] = g.lateOrig[1];
+    }
+    if (uintptr_t m = SigFind("title: render reader", kSigTitleR)) {
+        g.objB = RipTarget(m, 3, 7);
+        g.titleR = m + 0x28;
+        memcpy(g.trOrig, (void*)g.titleR, 6); memset(g.trPatch, 0x90, 6);  // je -> nops
+    }
+    if (uintptr_t m = SigFind("title: prepare reader", kSigTitleP)) {
+        g.titleP = m + 16;
+        memcpy(g.tpOrig, (void*)g.titleP, 2);                          // jne -> jmp
+        g.tpPatch[0] = 0xeb; g.tpPatch[1] = g.tpOrig[1];
+    }
+    uintptr_t p1 = SigFind("physics: call 1", kSigPhys1), p2 = SigFind("physics: call 2", kSigPhys2);
+    if (p1 && p2) {
+        uintptr_t s1 = p1 + 13, s2 = p2 + 16, t1 = RipTarget(s1, 1, 5), t2 = RipTarget(s2, 1, 5);
+        static const uint8_t prolog[] = { 0x48, 0x8b, 0xc4, 0x48, 0x89, 0x58, 0x18 };
+        if (t1 == t2 && !memcmp((void*)t1, prolog, sizeof prolog)) { g.phys[0] = s1; g.phys[1] = s2; g.physTarget = t1; }
+        else Log("game code: physics calls do not lead to the expected function - not recognised");
+    }
+    auto r = [&](uintptr_t a) { return a ? (unsigned long long)(a - exe) : 0ull; };
+    Log("game code: objA exe+%llx, objB exe+%llx, capture +0x%x, menus exe+%llx/%llx, title exe+%llx/%llx, physics exe+%llx/%llx -> exe+%llx",
+        r(g.objA), r(g.objB), g.captureOff, r(g.menuEarly), r(g.menuLate), r(g.titleR), r(g.titleP), r(g.phys[0]), r(g.phys[1]), r(g.physTarget));
+    return TRUE;
+}
+static const GameAddrs& Game() {
+    static INIT_ONCE once = INIT_ONCE_STATIC_INIT;
+    InitOnceExecuteOnce(&once, ResolveGameOnce, nullptr, nullptr);
+    return g_ga;
+}
+
 // ---- menu blur (step 11a) ----
 // Since 9c the world is drawn live behind menus, sharp. The game still runs its menu fade (the
-// screen-capture object: game object +0x698 -> scene renderer, +0x8b8 -> capture, +0xc4 = blend
+// screen-capture object: game object B +0x698 -> scene renderer, +captureOff -> capture, +0xc4 = blend
 // 0..1), so we blur + dim each eye image by that amount: quarter-size copy, 2x separable Gaussian,
 // mixed back in. Done after each eye's render pass, before it goes to the headset (monitor unchanged).
 static float MenuBlendAmount() {
-    uintptr_t exe = (uintptr_t)GetModuleHandleA(nullptr);
+    const GameAddrs& ga = Game();
+    if (!ga.objB || !ga.captureOff) return 0;
     SIZE_T got = 0; HANDLE pr = GetCurrentProcess();
     uintptr_t obj = 0, sr = 0, cap = 0, cv = 0; uint8_t valid = 0; float blend = 0;
-    if (!ReadProcessMemory(pr, (void*)(exe + 0x908db8), &obj, 8, &got) || !obj) return 0;
+    if (!ReadProcessMemory(pr, (void*)ga.objB, &obj, 8, &got) || !obj) return 0;
     if (!ReadProcessMemory(pr, (void*)(obj + 0x698), &sr, 8, &got) || !sr) return 0;
-    if (!ReadProcessMemory(pr, (void*)(sr + 0x8b8), &cap, 8, &got) || !cap) return 0;
+    if (!ReadProcessMemory(pr, (void*)(sr + ga.captureOff), &cap, 8, &got) || !cap) return 0;
     if (!ReadProcessMemory(pr, (void*)(cap + 0x10), &cv, 8, &got) || !cv) return 0;
     if (!ReadProcessMemory(pr, (void*)(cv + 0x43), &valid, 1, &got) || !valid) return 0;
     if (!ReadProcessMemory(pr, (void*)(cap + 0xc4), &blend, 4, &got)) return 0;
@@ -2808,8 +2915,8 @@ static void BlurUiTarget(ID3D11DeviceContext* c, float k) {
 
 // ---- dual render: hook the game's render call ----
 // Frame loop (exe+0x495750): game->vfunc[+0x40](dt) prepares the frame (cb_scene upload),
-// then game->vfunc[+0x60]() renders every pass, then Present. The game object is the global at
-// exe+0x905870. We patch its vtable slot 12 (+0x60) and call the original twice per frame:
+// then game->vfunc[+0x60]() renders every pass, then Present. The game object is a global
+// (exe+905870 in 1.06.1, found by kSigGameObj). We patch its vtable slot 12 (+0x60) and call the original twice per frame:
 // left eye, capture, right eye (prepare-phase buffers re-uploaded), capture.
 using PFN_Render = void(*)(void*);
 static PFN_Render o_Render = nullptr;
@@ -2977,14 +3084,9 @@ static void InstallPhysicsHook() {
     done = true;
     if (!g_cfg.physics) { Log("controller physics: off ([Controllers] Physics=0)"); return; }
     uintptr_t exe = (uintptr_t)GetModuleHandleA(nullptr);
-    const uintptr_t target = exe + 0x4e4680, sites[2] = { exe + 0x47510f, exe + 0x475250 };
-    static const uint8_t prolog[] = { 0x48, 0x8b, 0xc4 };          // checked below against the real bytes
-    for (uintptr_t s2 : sites) {
-        if (*(uint8_t*)s2 != 0xe8 || s2 + 5 + *(int32_t*)(s2 + 1) != target) {
-            Log("controller physics: game version not recognised (call site exe+%llx) - off", (unsigned long long)(s2 - exe)); return;
-        }
-    }
-    (void)prolog;
+    const GameAddrs& ga = Game();
+    if (!ga.physTarget) { Log("controller physics: game version not recognised - off"); return; }
+    const uintptr_t target = ga.physTarget, sites[2] = { ga.phys[0], ga.phys[1] };
     uint8_t* stub = (uint8_t*)AllocNear(exe, 64);
     if (!stub) { Log("controller physics: no memory near the game exe - off"); return; }
     stub[0] = 0xff; stub[1] = 0x25; *(int32_t*)(stub + 2) = 0;     // jmp [rip+0]
@@ -3061,12 +3163,9 @@ static void InstallRenderHook() {
     static bool done = false;
     if (done || !g_cfg.dual) return;
     uintptr_t exe = (uintptr_t)GetModuleHandleA(nullptr);
-    static const uint8_t callSite[] = { 0x48, 0x8b, 0x06, 0x48, 0x8b, 0xce, 0xff, 0x50, 0x60 };   // mov rax,[rsi]; mov rcx,rsi; call [rax+60h]
-    static const uint8_t objLoad[]  = { 0x48, 0x8b, 0x35, 0xef, 0xfe, 0x46, 0x00 };             // mov rsi,[rip+46FEEFh] -> exe+905870
-    if (memcmp((void*)(exe + 0x495a49), callSite, sizeof callSite) || memcmp((void*)(exe + 0x49597a), objLoad, sizeof objLoad)) {
-        done = true; Log("dual render: game version not recognised (frame loop differs) - staying with alternate-eye"); return;
-    }
-    void* obj = *(void**)(exe + 0x905870);
+    const GameAddrs& ga = Game();
+    if (!ga.objA) { done = true; Log("dual render: game version not recognised (frame loop differs) - staying with alternate-eye"); return; }
+    void* obj = *(void**)ga.objA;
     if (!obj) return;                                  // game object not created yet: try again next frame
     done = true;
     void** vt = *(void***)obj;
@@ -3087,9 +3186,7 @@ static void InstallRenderHook() {
 // Patch: always take the normal path (je -> jmp) and never composite (jbe -> jmp), so the world
 // is drawn live (dual render = real 3D, head-tracked) behind menus, sharp.
 // (9a patched the game's "draw world" byte readers instead: that only covers loading/transitions.)
-static const uintptr_t kEarlyAt = 0x2b3c19, kLateAt = 0x2b688d;
-static const uint8_t kEarlyOrig[] = { 0x0f, 0x84, 0x4f, 0x02, 0x00, 0x00 }, kEarlyPatch[] = { 0xe9, 0x50, 0x02, 0x00, 0x00, 0x90 };   // je +24f -> jmp +250; nop
-static const uint8_t kLateOrig[] = { 0x76, 0x5c }, kLatePatch[] = { 0xeb, 0x5c };                                                    // jbe -> jmp
+// Addresses and bytes come from the signatures (GameAddrs).
 static bool WriteCode(uintptr_t a, const uint8_t* from, const uint8_t* to, size_t n) {
     if (memcmp((void*)a, from, n)) return false;
     DWORD old;
@@ -3101,14 +3198,12 @@ static bool WriteCode(uintptr_t a, const uint8_t* from, const uint8_t* to, size_
 }
 static void SetLiveWorld(bool on) {           // called from Present (the game's render code is not running then)
     if (on == g_liveOn) return;
-    uintptr_t exe = (uintptr_t)GetModuleHandleA(nullptr);
-    static const uint8_t ctxE[] = { 0x80, 0x78, 0x43, 0x00 };          // cmp byte [rax+43h],0 (capture valid?)
-    static const uint8_t ctxL[] = { 0x41, 0x0f, 0x2f, 0xc0 };          // comiss xmm0,xmm8 (blend > 0?)
-    if (memcmp((void*)(exe + kEarlyAt - 4), ctxE, sizeof ctxE) || memcmp((void*)(exe + kLateAt - 4), ctxL, sizeof ctxL)) {
+    const GameAddrs& g = Game();
+    if (!g.menuEarly || !g.menuLate) {
         Log("live world in menus: game version not recognised - not patched"); g_cfg.liveWorld = false; return;
     }
-    bool ok = on ? WriteCode(exe + kEarlyAt, kEarlyOrig, kEarlyPatch, sizeof kEarlyOrig) && WriteCode(exe + kLateAt, kLateOrig, kLatePatch, sizeof kLateOrig)
-                 : WriteCode(exe + kEarlyAt, kEarlyPatch, kEarlyOrig, sizeof kEarlyOrig) && WriteCode(exe + kLateAt, kLatePatch, kLateOrig, sizeof kLateOrig);
+    bool ok = on ? WriteCode(g.menuEarly, g.earlyOrig, g.earlyPatch, 6) && WriteCode(g.menuLate, g.lateOrig, g.latePatch, 2)
+                 : WriteCode(g.menuEarly, g.earlyPatch, g.earlyOrig, 6) && WriteCode(g.menuLate, g.latePatch, g.lateOrig, 2);
     if (!ok) { Log("live world in menus: patch %s FAILED (bytes differ)", on ? "on" : "off"); g_cfg.liveWorld = g_liveOn; return; }
     g_liveOn = on;
     Log("live world in menus: %s", on ? "ON - the 3D world is drawn live behind menus (no blurred screenshot)" : "OFF - the game's blurred screenshot is used again");
@@ -3120,24 +3215,21 @@ static void SetLiveWorld(bool on) {           // called from Present (the game's
 static void SetLiveTitle(bool on) {
     static bool cur = false;
     if (on == cur) return;
-    static const uint8_t rOrig[] = { 0x0f, 0x84, 0x89, 0x00, 0x00, 0x00 }, rPatch[] = { 0x90, 0x90, 0x90, 0x90, 0x90, 0x90 };
-    static const uint8_t pOrig[] = { 0x75, 0x1c }, pPatch[] = { 0xeb, 0x1c };
-    static const uint8_t ctxR[] = { 0x0f, 0xb6, 0x83, 0xa5, 0x1b, 0x00, 0x00, 0x84, 0xc0 }, ctxP[] = { 0x0f, 0xb6, 0x86, 0xa5, 0x1b, 0x00, 0x00 };
-    uintptr_t exe = (uintptr_t)GetModuleHandleA(nullptr);
-    if (memcmp((void*)(exe + 0x301ad), ctxR, sizeof ctxR) || memcmp((void*)(exe + 0x23dfa0), ctxP, sizeof ctxP)) {
+    const GameAddrs& g = Game();
+    if (!g.titleR || !g.titleP) {
         Log("live title screen: game version not recognised - not patched"); g_cfg.liveTitle = false; return;
     }
-    bool ok = on ? WriteCode(exe + 0x301b6, rOrig, rPatch, sizeof rOrig) && WriteCode(exe + 0x23dfb0, pOrig, pPatch, sizeof pOrig)
-                 : WriteCode(exe + 0x301b6, rPatch, rOrig, sizeof rOrig) && WriteCode(exe + 0x23dfb0, pPatch, pOrig, sizeof pOrig);
+    bool ok = on ? WriteCode(g.titleR, g.trOrig, g.trPatch, 6) && WriteCode(g.titleP, g.tpOrig, g.tpPatch, 2)
+                 : WriteCode(g.titleR, g.trPatch, g.trOrig, 6) && WriteCode(g.titleP, g.tpPatch, g.tpOrig, 2);
     if (!ok) { Log("live title screen: patch FAILED (bytes differ)"); g_cfg.liveTitle = cur; return; }
     cur = on;
     Log("live title screen: %s", on ? "ON (experiment) - title screen and transitions drawn live" : "OFF");
 }
 
 static void LogGameMode() {                   // the game's render mode / "draw world" byte, on change
-    uintptr_t exe = (uintptr_t)GetModuleHandleA(nullptr);
+    const GameAddrs& ga = Game();
     void* obj = nullptr; SIZE_T got = 0;
-    if (!ReadProcessMemory(GetCurrentProcess(), (void*)(exe + 0x908db8), &obj, sizeof obj, &got) || !obj) return;
+    if (!ga.objB || !ReadProcessMemory(GetCurrentProcess(), (void*)ga.objB, &obj, sizeof obj, &got) || !obj) return;
     uint32_t mode = 0; uint8_t flag = 0;
     if (!ReadProcessMemory(GetCurrentProcess(), (uint8_t*)obj + 0x1ba0, &mode, 4, &got) ||
         !ReadProcessMemory(GetCurrentProcess(), (uint8_t*)obj + 0x1ba5, &flag, 1, &got)) return;
