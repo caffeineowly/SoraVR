@@ -71,15 +71,15 @@ If the headset only shows a grey or loading screen, see *Troubleshooting* below.
 | **F2 / F3** | Field of view narrower / wider (saved) |
 | **F4** | Head tracking off / on (for this session) |
 | **F5** | Level horizon on / off |
-| **F6** | Swap left and right eye (if the 3D ever looks inside-out) |
+| **F6** | Swap left and right eye (if the 3D ever looks inside-out) (saved) |
 | **F7 / F8** | World scale smaller / bigger: how big the world feels (saved) |
 | **F9** | Dual render on / off (off = older, faster alternate-eye mode) |
 | **F10** | Stereo 3D on / off |
-| **F12** | Field-of-view lock on / off |
+| **F12** | Field-of-view lock on / off (on at every start; set `FovLock` in the ini to change that) |
 | **Insert** | Floating panel on / off |
-| **Delete** | Panel stays in the room / follows your head |
-| **PgUp / PgDn** | Panel nearer / farther |
-| **Home / End** | Panel bigger / smaller |
+| **Delete** | Panel stays in the room / follows your head (saved) |
+| **PgUp / PgDn** | Panel nearer / farther (saved) |
+| **Home / End** | Panel bigger / smaller (saved) |
 | **Ctrl+F10** | Live 3D world behind menus on / off |
 | **Ctrl+F5 / Ctrl+F6** | Depth of 3D models in menus less / more (saved) |
 | **Ctrl+F7 / Ctrl+F8** | 3D models in menus further back / closer (saved) |
@@ -88,7 +88,7 @@ If the headset only shows a grey or loading screen, see *Troubleshooting* below.
 | **Ctrl+Home / Ctrl+End** | Physics sphere forward / back (saved) |
 | **Ctrl+F12** | Search the game's field-of-view setting by hand |
 
-Most keys can be changed in the `[Keys]` section of `SoraVR.ini`.
+Keys marked *saved* write their new value to `SoraVR.ini`. The on/off keys only last until you close the game, so the next start always uses the ini. Most keys can be changed in the `[Keys]` section of `SoraVR.ini`.
 
 ## 6. Settings
 
@@ -104,7 +104,7 @@ All settings are in **`SoraVR.ini`** next to `sora_1st.exe`, each with a short e
 | `OrbSize`, `FadeWhenStill` | `[Controllers]` | Orb size, and whether it fades when still. |
 | `Physics` | `[Controllers]` | Hair/cloth reacting to the controllers on/off. |
 
-Several hotkeys save their value to the ini straight away. To go back to the defaults, delete `SoraVR.ini` and start the game; a fresh one is written.
+Hotkeys marked *saved* write their value to the ini straight away. To go back to the defaults, delete `SoraVR.ini` and start the game; a fresh one is written.
 
 ## 7. Troubleshooting
 

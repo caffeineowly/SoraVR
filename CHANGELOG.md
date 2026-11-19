@@ -14,6 +14,12 @@ Add a line under *Unreleased* with every fix or pull request (with its number an
   by their code instead of their hash, and the replacements adapt to the game's data layout. Fixes
   floating labels/markers and too-thick outlines on 1.07. `tools/shaderprint.py` fingerprints a
   hunting dump.
+- Default ini rewritten for readability: every setting has its explanation right above it,
+  sections have clear headers, old experiments removed. Hotkeys can use names like `Insert` or
+  `PageUp`, and some keys have clearer names (`WorldScaleUp`, `Panel`, ...; old names still work).
+- Only the values the hotkeys adjust are saved (world scale, FOV, panel size/distance/mode, eye
+  swap). On/off keys like F12 (FOV lock) no longer stick between sessions, and the ini no longer
+  fills up with old experimental settings.
 - README: volumetric lighting named correctly; DLSS/FSR (game 1.07) should be off; tested game versions.
 
 ## [1.0-rc2] – 2026-11-19

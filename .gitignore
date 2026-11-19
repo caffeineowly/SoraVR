@@ -14,3 +14,7 @@ logs/
 *.swp
 .DS_Store
 Thumbs.db
+
+# showcase video (upload to YouTube/Nexus, too big for git)
+docs/video/
+*.mp4

@@ -123,9 +123,18 @@ static int IniKey(const char* name, int def) {
         int n = atoi(buf + 1); if (n >= 1 && n <= 24) return VK_F1 + n - 1;
     }
     if (!strncmp(buf, "0x", 2) || !strncmp(buf, "0X", 2)) return (int)strtol(buf, nullptr, 16);
+    static const struct { const char* n; int vk; } names[] = {
+        { "Insert", VK_INSERT }, { "Delete", VK_DELETE }, { "Home", VK_HOME }, { "End", VK_END },
+        { "PageUp", VK_PRIOR }, { "PageDown", VK_NEXT }, { "Pause", VK_PAUSE }, { "ScrollLock", VK_SCROLL },
+        { "Backspace", VK_BACK }, { "Tab", VK_TAB }, { "Space", VK_SPACE } };
+    for (const auto& k : names) if (!_stricmp(buf, k.n)) return k.vk;
+    if (buf[1] == 0 && buf[0] >= 'a' && buf[0] <= 'z') return buf[0] - 'a' + 'A';
     if (buf[1] == 0 && ((buf[0] >= 'A' && buf[0] <= 'Z') || (buf[0] >= '0' && buf[0] <= '9'))) return buf[0];
     return def;
 }
+
+// Key with a newer, clearer name; the old name (from older inis) still works.
+static int IniKey2(const char* name, const char* oldName, int def) { return IniKey(name, IniKey(oldName, def)); }
 
 static void LoadConfig() {
     char buf[64];
@@ -134,10 +143,10 @@ static void LoadConfig() {
     GetPrivateProfileStringA("Stereo", "Separation", "0.064", buf, sizeof buf, g_ini);
     g_cfg.separation = (float)atof(buf);
     if (!(g_cfg.separation > 0.0f && g_cfg.separation < 100.0f)) g_cfg.separation = 0.064f;
-    g_cfg.keyToggle  = IniKey("Toggle", VK_F10);
-    g_cfg.keyMode    = IniKey("Mode", VK_F11);
-    g_cfg.keySepDown = IniKey("SeparationDown", VK_F7);
-    g_cfg.keySepUp   = IniKey("SeparationUp", VK_F8);
+    g_cfg.keyToggle  = IniKey2("Stereo3D", "Toggle", VK_F10);
+    g_cfg.keyMode    = IniKey2("EyeTest", "Mode", VK_F11);
+    g_cfg.keySepDown = IniKey2("WorldScaleDown", "SeparationDown", VK_F7);
+    g_cfg.keySepUp   = IniKey2("WorldScaleUp", "SeparationUp", VK_F8);
     g_cfg.swapEyes   = GetPrivateProfileIntA("Stereo", "SwapEyes", 0, g_ini) != 0;
     g_cfg.keySwapEyes = IniKey("SwapEyes", VK_F6);
     // Always on at start (F4 toggles it for the session only; it used to be saved, so a session that
@@ -193,9 +202,9 @@ static void LoadConfig() {
     g_cfg.dual       = GetPrivateProfileIntA("Stereo", "DualRender", 1, g_ini) != 0;
     g_cfg.keyPaired  = IniKey("DualRender", VK_F9);
     GetPrivateProfileStringA("VR", "GameFov", "90", buf, sizeof buf, g_ini);    g_cfg.gameFov = fminf(fmaxf((float)atof(buf), 20.0f), 140.0f);
-    g_cfg.keyHud = IniKey("HudToggle", VK_INSERT);   g_cfg.keyHudLock = IniKey("HudHeadLock", VK_DELETE);
-    g_cfg.keyHudNear = IniKey("HudNearer", VK_PRIOR); g_cfg.keyHudFar = IniKey("HudFarther", VK_NEXT);
-    g_cfg.keyHudBig = IniKey("HudBigger", VK_HOME);   g_cfg.keyHudSmall = IniKey("HudSmaller", VK_END);
+    g_cfg.keyHud = IniKey2("Panel", "HudToggle", VK_INSERT);   g_cfg.keyHudLock = IniKey2("PanelFollowHead", "HudHeadLock", VK_DELETE);
+    g_cfg.keyHudNear = IniKey2("PanelNearer", "HudNearer", VK_PRIOR); g_cfg.keyHudFar = IniKey2("PanelFarther", "HudFarther", VK_NEXT);
+    g_cfg.keyHudBig = IniKey2("PanelBigger", "HudBigger", VK_HOME);   g_cfg.keyHudSmall = IniKey2("PanelSmaller", "HudSmaller", VK_END);
     g_cfg.keyFovProbe = IniKey("FovProbe", VK_F12);
     g_cfg.keyLiveWorld = IniKey("LiveWorldInMenus", 0);
     g_cfg.liveWorld = GetPrivateProfileIntA("Stereo", "LiveWorldInMenus", 1, g_ini) != 0;
@@ -209,25 +218,14 @@ static void LoadConfig() {
     LoadBillboardCfg();
 }
 
+// Saves only the preferences the hotkeys adjust (world scale, FOV, panel size/distance/mode, eye
+// swap). On/off toggles (F4, F5, F9-F12, Insert) last for the session only, so a key pressed while
+// testing doesn't stick, and the ini never gains keys it didn't have.
 static void SaveConfig() {
     char buf[64];
-    WritePrivateProfileStringA("Stereo", "Enabled", g_cfg.enabled ? "1" : "0", g_ini);
-    snprintf(buf, sizeof buf, "%d", g_cfg.mode);
-    WritePrivateProfileStringA("Stereo", "Mode", buf, g_ini);
-    snprintf(buf, sizeof buf, "%.5f", g_cfg.separation);
-    WritePrivateProfileStringA("Stereo", "Separation", buf, g_ini);
+    snprintf(buf, sizeof buf, "%.4f", g_cfg.worldScale); WritePrivateProfileStringA("VR", "WorldScale", buf, g_ini);
+    snprintf(buf, sizeof buf, "%.1f", g_cfg.gameFov);    WritePrivateProfileStringA("VR", "GameFov", buf, g_ini);
     WritePrivateProfileStringA("Stereo", "SwapEyes", g_cfg.swapEyes ? "1" : "0", g_ini);
-    WritePrivateProfileStringA("VR", "LevelHorizon", g_cfg.levelHorizon ? "1" : "0", g_ini);
-    snprintf(buf, sizeof buf, "%.4f", g_cfg.worldScale);
-    WritePrivateProfileStringA("VR", "WorldScale", buf, g_ini);
-    snprintf(buf, sizeof buf, "%.3f", g_cfg.fovScale);
-    WritePrivateProfileStringA("VR", "FovScale", buf, g_ini);
-    snprintf(buf, sizeof buf, "%.1f", g_cfg.gameFov);
-    WritePrivateProfileStringA("VR", "GameFov", buf, g_ini);
-    WritePrivateProfileStringA("VR", "FovLock", g_cfg.fovLock ? "1" : "0", g_ini);
-    WritePrivateProfileStringA("Stereo", "PairedFrames", g_cfg.paired ? "1" : "0", g_ini);
-    WritePrivateProfileStringA("Stereo", "DualRender", g_cfg.dual ? "1" : "0", g_ini);
-    WritePrivateProfileStringA("HUD", "Enabled", g_cfg.hud ? "1" : "0", g_ini);
     WritePrivateProfileStringA("HUD", "HeadLocked", g_cfg.hudHeadLock ? "1" : "0", g_ini);
     snprintf(buf, sizeof buf, "%.2f", g_cfg.hudDistance); WritePrivateProfileStringA("HUD", "Distance", buf, g_ini);
     snprintf(buf, sizeof buf, "%.2f", g_cfg.hudWidth);    WritePrivateProfileStringA("HUD", "Width", buf, g_ini);
