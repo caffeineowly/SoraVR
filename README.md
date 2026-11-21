@@ -13,6 +13,18 @@ SoraVR turns the PC version of *Trails in the Sky 1st Chapter* into a seated VR 
 
 You still play with mouse/keyboard or a gamepad. The controllers are for pointing at the panel and touching things.
 
+## Screenshots
+
+Captured in the headset, both eyes side by side as **cross-eye** pairs: cross your eyes until the two pictures merge into a third one in the middle, and it shows in 3D. Versions for parallel viewing (left eye on the left) are in [`docs/screenshots`](docs/screenshots).
+
+| | |
+|---|---|
+| ![Town square](docs/screenshots/01-town-square-crosseye.jpg) | ![Dialogue in a shop, with a world label](docs/screenshots/02-shop-dialogue-crosseye.jpg) |
+| Town square | Dialogue, labels sit in the world |
+| ![Grass field with the controller orb](docs/screenshots/04-field-orb-crosseye.jpg) | ![Battle with a fire art](docs/screenshots/05-battle-crosseye.jpg) |
+| In the field, with a controller orb | Battle |
+
+
 ---
 
 ## 1. What you need
