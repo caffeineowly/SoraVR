@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 caffeineowly - SoraVR, https://github.com/caffeineowly/SoraVR
+
 // SoraVR OpenXR output.
 // Each Present, the frame the game just rendered (one eye, alternating) is copied into a
 // persistent per-eye texture; both eye textures are then submitted as a stereo projection

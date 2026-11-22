@@ -13,6 +13,13 @@ Add a line under *Unreleased* with every fix or pull request (with its number an
 - The proxy d3d11.dll now forwards all of the system d3d11.dll's exports, not only the two the game uses.
 - Controller physics is only enabled in `sora_1st.exe` (2nd Chapter's physics interface differs and crashed).
 
+### Added
+- `LICENSE` (GPL-3.0-or-later) and SPDX headers in the sources.
+- `tools/release.sh`: builds the release zip with the official Khronos OpenXR loader 1.1.65 (checksum
+  verified) and writes SHA256SUMS.txt. Zip layout: `d3d11.dll` + `openxr_loader.dll` at the top, docs
+  and licences in a `SoraVR` folder - extract into the game folder.
+- *Trails in the Sky 2nd Chapter* demo starts in VR (experimental: alternate-eye, no physics).
+
 ### Changed
 - Game code is now found by byte signatures instead of fixed addresses, so SoraVR works on game
   versions 1.06.1 and 1.07 (and should survive small updates). `tools/sigcheck.py` checks the

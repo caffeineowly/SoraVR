@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 caffeineowly - SoraVR, https://github.com/caffeineowly/SoraVR
+
 // SoraVR - alternate-eye stereo for Trails in the Sky 1st Chapter (D3D11).
 //
 // Step 1: d3d11.dll proxy that finds the game's per-frame camera constant buffer
@@ -11,6 +14,7 @@
 //   F7/F8 separation smaller/larger (x0.8 / x1.25)
 
 #define WIN32_LEAN_AND_MEAN
+#define SORAVR_VERSION "1.0.0"   // also read by tools/release.sh
 #include <windows.h>
 #include <d3d11_1.h>
 #include <d3dcompiler.h>
@@ -265,7 +269,7 @@ static void Init() {
         snprintf(g_ini, sizeof g_ini, "%sSoraVR.ini", g_dir);
         std::string logPath = std::string(g_dir) + "SoraVR.log";
         g_log = fopen(logPath.c_str(), "w");
-        Log("SoraVR v1.0-rc3 (game code found by signatures: 1.06.1 and 1.07)");
+        Log("SoraVR v" SORAVR_VERSION " (game code found by signatures: 1st Chapter 1.06.1 and 1.07)");
         InstallCrashLogger();
         {   // the mod was called SkyStereo until v1.0-rc2: keep the user's settings
             char old[MAX_PATH]; snprintf(old, sizeof old, "%sSkyStereo.ini", g_dir);

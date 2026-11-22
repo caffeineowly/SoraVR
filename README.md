@@ -31,22 +31,20 @@ Captured in the headset, both eyes side by side as **cross-eye** pairs: cross yo
 
 | | |
 |---|---|
-| Game | *Trails in the Sky 1st Chapter* for PC (Steam), tested with versions **1.06.1** and **1.07**. SoraVR finds the game code it needs by itself, so small updates usually keep working; if it doesn't recognise something, it switches only that feature off and says so in the log. |
+| Game | *Trails in the Sky 1st Chapter* for PC (Steam), tested with versions **1.06.1** and **1.07**, started from Steam or from the game folder. SoraVR finds the game code it needs by itself, so small updates usually keep working; if it doesn't recognise something, it switches only that feature off and says so in the log.<br>*Trails in the Sky 2nd Chapter* (demo): **experimental**. It starts and shows in VR, but with the simpler alternate-eye mode, no hair physics and no live world behind menus. Full support is planned. |
 | VR | A PC VR headset with an **OpenXR** runtime. Tested: Windows Mixed Reality headset through **SteamVR** (SteamVR as the OpenXR runtime). |
-| Files | `d3d11.dll` (SoraVR), `SoraVR.default.ini`, `LICENSE-OpenXR.txt` and this README from the SoraVR package, plus **`openxr_loader.dll`**, the standard OpenXR loader from the Khronos OpenXR SDK (Apache 2.0). If you used FDK_vr before, its `openxr_loader.dll` works. |
+| Files | The SoraVR zip: `d3d11.dll` (SoraVR), `openxr_loader.dll` (the official Khronos OpenXR loader, Apache 2.0) and a `SoraVR` folder with this README, the licences, the changelog and the default settings. |
 | PC | A strong GPU. Both eyes are rendered every frame, so expect roughly half your normal frame rate. Lower the game's render scale if it's too slow. |
 
 ## 2. Install
 
 1. Find the game folder: the folder that contains **`sora_1st.exe`**. (Steam: right-click the game → *Manage* → *Browse local files*, then into the `game` folder.)
-2. Copy these files into that folder, next to `sora_1st.exe`:
-   - `d3d11.dll`
-   - `openxr_loader.dll`
-3. Optional: copy `SoraVR.default.ini` there too and rename it to **`SoraVR.ini`**. If you skip this, SoraVR creates the same file the first time it runs.
+2. Extract the zip into that folder, so that `d3d11.dll` and `openxr_loader.dll` sit next to `sora_1st.exe`. (The `SoraVR` folder only holds documentation and can go anywhere.)
+3. Start SteamVR (or your OpenXR runtime), then start the game, from Steam or from the folder. SoraVR creates `SoraVR.ini` with all settings the first time it runs.
 4. **Upgrading from SkyStereo** (the old name of this mod): just replace `d3d11.dll`. Your `SkyStereo.ini` is renamed to `SoraVR.ini` automatically, so your settings are kept. The old `SkyStereo.log` can be deleted.
 5. If another d3d11 mod is in that folder (for example FDK_vr or 3DMigoto), remove it first. Only one `d3d11.dll` can be used.
 
-**Uninstall:** delete `d3d11.dll`, `openxr_loader.dll`, `SoraVR.ini` and `SoraVR.log` from the game folder.
+**Uninstall:** delete `d3d11.dll`, `openxr_loader.dll`, `SoraVR.ini`, `SoraVR.log` and the `SoraVR` folder from the game folder.
 
 ## 3. Recommended game settings
 
@@ -150,9 +148,12 @@ SoraVR has "shader hunting" keys for finding which shader draws something:
 - **DLSS and FSR** (game 1.07+) leave ghost images of the other eye: keep them off.
 - **Objects can disappear at the edges of the view in some scenes.** The game skips drawing things it thinks are off-screen, based on its own camera. In scenes where the game uses its own special camera (some cutscenes), SoraVR's wider field of view can't reach the game's visibility check, so objects near the edges of the headset view may pop in and out.
 - **The title screen** is flat. It's shown as a big screen behind the menu panel, because the game doesn't render it as a 3D scene.
+- **Some soft shadows look flat**, as if painted onto the picture rather than lying on the surfaces. Not distracting, but noticeable; being looked into.
+- **2nd Chapter (demo)** is experimental: alternate-eye only, no hair physics, flat menu background.
 - The controllers don't act as a gamepad yet (planned for v1.1).
 
 ## 9. Credits and licences
 
+- SoraVR is free software: GNU General Public License v3.0 or later (`LICENSE`). Source code: https://github.com/caffeineowly/SoraVR
 - SoraVR is a fan-made mod, not affiliated with the game's developers or publishers.
 - OpenXR headers and loader © The Khronos Group, Apache License 2.0 (`LICENSE-OpenXR.txt`).

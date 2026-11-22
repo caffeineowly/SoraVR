@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 caffeineowly - SoraVR, https://github.com/caffeineowly/SoraVR
+
 // Forwarders for the rest of the real d3d11.dll exports (generated list, see build notes).
 // SoraVR only needs D3D11CreateDevice(AndSwapChain), but other DLLs loaded into the game (the
 // Steam overlay, for example) look up more exports from "d3d11.dll" and would get nothing.

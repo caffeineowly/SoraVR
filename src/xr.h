@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 caffeineowly - SoraVR, https://github.com/caffeineowly/SoraVR
+
 #pragma once
 #include <d3d11.h>
 #include <dxgi.h>
