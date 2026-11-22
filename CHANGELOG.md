@@ -3,7 +3,10 @@
 All notable changes to SoraVR. Format: [Keep a Changelog](https://keepachangelog.com/).
 Add a line under *Unreleased* with every fix or pull request (with its number and credit).
 
-## [Unreleased]
+## [1.0.0] – 2026-11-22
+
+First public release. Tested: *Trails in the Sky 1st Chapter* 1.06.1 and 1.07 (started from Steam or
+the game folder), *2nd Chapter* demo (experimental), SteamVR 2.18 with a WMR headset.
 
 ### Fixed
 - Crash (and, with an intermediate fix, a freeze) on the first frame when the game is started from

@@ -154,6 +154,7 @@ SoraVR has "shader hunting" keys for finding which shader draws something:
 
 ## 9. Credits and licences
 
+- SoraVR is free and always will be. If you enjoy it, you can [support me on Ko-fi](https://ko-fi.com/caffeineowly) ☕
 - SoraVR is free software: GNU General Public License v3.0 or later (`LICENSE`). Source code: https://github.com/caffeineowly/SoraVR
 - SoraVR is a fan-made mod, not affiliated with the game's developers or publishers.
 - OpenXR headers and loader © The Khronos Group, Apache License 2.0 (`LICENSE-OpenXR.txt`).
