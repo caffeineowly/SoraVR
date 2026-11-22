@@ -638,6 +638,26 @@ static LONG CALLBACK CrashHandler(EXCEPTION_POINTERS* ep) {
         code == EXCEPTION_ACCESS_VIOLATION ? (ep->ExceptionRecord->ExceptionInformation[0] ? " writing" : " reading") : "");
     if (code == EXCEPTION_ACCESS_VIOLATION) Log("  address %p", (void*)ep->ExceptionRecord->ExceptionInformation[1]);
     LogStack("exception");
+    {   // The crashed thread's own stack (LogStack above only shows this handler): code addresses
+        // found on it, nearest first. For a call through a null pointer, the first is the caller.
+        CONTEXT* c = ep->ContextRecord;
+        Log("  rip %p rsp %p rax %p rcx %p rdx %p r8 %p r9 %p", (void*)c->Rip, (void*)c->Rsp, (void*)c->Rax, (void*)c->Rcx, (void*)c->Rdx, (void*)c->R8, (void*)c->R9);
+        std::string line; int found = 0;
+        auto* sp = (uintptr_t*)c->Rsp;
+        for (int i = 0; i < 512 && found < 16; i++) {
+            MEMORY_BASIC_INFORMATION mi;
+            if (!VirtualQuery(sp + i, &mi, sizeof mi) || mi.State != MEM_COMMIT || (mi.Protect & (PAGE_NOACCESS | PAGE_GUARD))) break;
+            uintptr_t v = sp[i];
+            HMODULE mm = nullptr;
+            if (v < 0x10000 || !GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)v, &mm) || !mm) continue;
+            if (!VirtualQuery((void*)v, &mi, sizeof mi) || !(mi.Protect & (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY))) continue;
+            char mn[MAX_PATH] = "?"; GetModuleFileNameA(mm, mn, MAX_PATH);
+            const char* b = strrchr(mn, '\\'); b = b ? b + 1 : mn;
+            char t[128]; snprintf(t, sizeof t, " [%d]%s+%llx", i, b, (unsigned long long)(v - (uintptr_t)mm));
+            line += t; found++;
+        }
+        Log("  thread stack:%s", line.c_str());
+    }
     return EXCEPTION_CONTINUE_SEARCH;
 }
 static void InstallCrashLogger() { static bool done = false; if (!done) { done = true; AddVectoredExceptionHandler(1, CrashHandler); } }
@@ -2848,7 +2868,15 @@ static BOOL CALLBACK ResolveGameOnce(PINIT_ONCE, PVOID, PVOID*) {
         memcpy(g.tpOrig, (void*)g.titleP, 2);                          // jne -> jmp
         g.tpPatch[0] = 0xeb; g.tpPatch[1] = g.tpOrig[1];
     }
-    uintptr_t p1 = SigFind("physics: call 1", kSigPhys1), p2 = SigFind("physics: call 2", kSigPhys2);
+    // The physics hook swaps the game's collision modifier object for ours, which only works if its
+    // interface is the one 1st Chapter uses. 2nd Chapter matches the call sites but crashed on the
+    // first physics update, so it is only enabled for sora_1st.exe.
+    char exePath[MAX_PATH] = ""; GetModuleFileNameA(nullptr, exePath, MAX_PATH);
+    const char* exeName = strrchr(exePath, '\\'); exeName = exeName ? exeName + 1 : exePath;
+    bool firstChapter = _stricmp(exeName, "sora_1st.exe") == 0;
+    Log("game exe: %s", exeName);
+    uintptr_t p1 = firstChapter ? SigFind("physics: call 1", kSigPhys1) : 0, p2 = firstChapter ? SigFind("physics: call 2", kSigPhys2) : 0;
+    if (!firstChapter) Log("game code: controller physics is only supported in sora_1st.exe - off");
     if (p1 && p2) {
         uintptr_t s1 = p1 + 13, s2 = p2 + 16, t1 = RipTarget(s1, 1, 5), t2 = RipTarget(s2, 1, 5);
         static const uint8_t prolog[] = { 0x48, 0x8b, 0xc4, 0x48, 0x89, 0x58, 0x18 };
@@ -3391,13 +3419,74 @@ static void BeforePresent(IDXGISwapChain* sc) {
     OnFrameEnd();
 }
 
+// Who presents, from which thread (overlay / startup diagnostics): logged when the caller changes.
+static void LogPresentCaller(const char* which, void* sc, UINT flags) {
+    static DWORD lastTid = 0; static void* lastSc = nullptr; static int n = 0;
+    DWORD tid = GetCurrentThreadId();
+    if ((tid != lastTid || sc != lastSc) && n < 12) {
+        n++; lastTid = tid; lastSc = sc;
+        Log("%s: called by thread %lu, swapchain %p, flags 0x%x, frame %ld", which, tid, sc, flags, (long)g_frame);
+        LogStack("present");
+    }
+}
 static HRESULT STDMETHODCALLTYPE Hook_Present(IDXGISwapChain* sc, UINT sync, UINT flags) {
+    LogPresentCaller("Present", sc, flags);
     if (!(flags & DXGI_PRESENT_TEST)) BeforePresent(sc);
     return o_Present(sc, sync, flags);
 }
 static HRESULT STDMETHODCALLTYPE Hook_Present1(IDXGISwapChain1* sc, UINT sync, UINT flags, const DXGI_PRESENT_PARAMETERS* p) {
+    LogPresentCaller("Present1", sc, flags);
     if (!(flags & DXGI_PRESENT_TEST)) BeforePresent(sc);
     return o_Present1(sc, sync, flags, p);
+}
+
+// The Steam overlay (and other overlays) hook Present with an inline detour on whatever function the
+// swapchain vtable points to - here ours. Our compiled hooks start with a short conditional jump,
+// which such detours can't relocate: the overlay then calls a null trampoline and the game crashes
+// (only when started from Steam, where the overlay is loaded). So the vtable gets a tiny stub with
+// a detour-friendly start instead: mov rax, imm64 / jmp rax, padded with int3.
+static void* DetourFriendlyThunk(void* target) {
+    uint8_t* t = (uint8_t*)VirtualAlloc(nullptr, 32, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    if (!t) return target;
+    memset(t, 0xcc, 32);
+    t[0] = 0x48; t[1] = 0xb8; memcpy(t + 2, &target, 8);     // mov rax, target
+    t[10] = 0xff; t[11] = 0xe0;                               // jmp rax
+    DWORD old; VirtualProtect(t, 32, PAGE_EXECUTE_READ, &old);
+    FlushInstructionCache(GetCurrentProcess(), t, 32);
+    return t;
+}
+
+// If an overlay already detoured the real Present (Steam overlay when the game is started from Steam:
+// it is loaded before us), the function starts with its jump: E9 rel32 or FF 25 [rip+disp32].
+// Then we must not change the vtable: the overlay hooks whatever the vtable points to on every new
+// swapchain and keeps only one "original", so it would end up calling itself. Instead we put our
+// jump in front of the overlay's: P -> our hook -> (o_Present) the overlay's hook -> the real Present.
+// The overlay finds P in its list of hooked functions and leaves it alone.
+static uintptr_t ExistingDetourTarget(const uint8_t* p) {
+    if (p[0] == 0xe9) return (uintptr_t)(p + 5) + *(const int32_t*)(p + 1);
+    if (p[0] == 0xff && p[1] == 0x25) return *(const uintptr_t*)(p + 6 + *(const int32_t*)(p + 2));
+    return 0;
+}
+static void* ChainInFront(void* fn, void* hook, const char* name) {
+    uint8_t* p = (uint8_t*)fn;
+    uintptr_t prev = ExistingDetourTarget(p);
+    if (!prev) return nullptr;
+    uint8_t* st = (uint8_t*)AllocNear((uintptr_t)p, 64);
+    if (!st) { Log("%s: no memory near the function - cannot chain", name); return nullptr; }
+    memset(st, 0xcc, 64);
+    st[0] = 0xff; st[1] = 0x25; *(int32_t*)(st + 2) = 0; *(void**)(st + 6) = hook;            // +0: jmp hook
+    st[32] = 0xff; st[33] = 0x25; *(int32_t*)(st + 34) = 0; *(uintptr_t*)(st + 38) = prev;     // +32: jmp previous detour
+    DWORD old; VirtualProtect(st, 64, PAGE_EXECUTE_READ, &old);
+    FlushInstructionCache(GetCurrentProcess(), st, 64);
+    int len = p[0] == 0xe9 ? 5 : 6;
+    uint8_t patch[6] = { 0xe9, 0, 0, 0, 0, 0x90 };
+    *(int32_t*)(patch + 1) = (int32_t)((intptr_t)st - (intptr_t)(p + 5));
+    VirtualProtect(p, len, PAGE_EXECUTE_READWRITE, &old);
+    memcpy(p, patch, len);
+    VirtualProtect(p, len, old, &old);
+    FlushInstructionCache(GetCurrentProcess(), p, len);
+    Log("%s: already hooked by another program (overlay) -> chained in front of it (no vtable change)", name);
+    return st + 32;
 }
 
 static void HookPresentViaDummy() {
@@ -3415,10 +3504,16 @@ static void HookPresentViaDummy() {
     HRESULT hr = g_realCreateDeviceAndSwapChain(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, 0, nullptr, 0,
                                                 D3D11_SDK_VERSION, &d, &sc, &dev, nullptr, &ctx);
     if (SUCCEEDED(hr) && sc) {
-        if (void* p = PatchVtable(sc, 8, (void*)Hook_Present)) o_Present = (PFN_Present)p;
+        void** vt = *(void***)sc;
+        { const uint8_t* b = (const uint8_t*)vt[8];
+          Log("Present starts with %02x %02x %02x %02x %02x %02x", b[0], b[1], b[2], b[3], b[4], b[5]); }
+        if (void* o = ChainInFront(vt[8], (void*)Hook_Present, "Present")) o_Present = (PFN_Present)o;
+        else if (void* p = PatchVtable(sc, 8, DetourFriendlyThunk((void*)Hook_Present))) o_Present = (PFN_Present)p;
         IDXGISwapChain1* sc1 = nullptr;
         if (SUCCEEDED(sc->QueryInterface(__uuidof(IDXGISwapChain1), (void**)&sc1)) && sc1) {
-            if (void* p = PatchVtable(sc1, 22, (void*)Hook_Present1)) o_Present1 = (PFN_Present1)p;
+            void** vt1 = *(void***)sc1;
+            if (void* o = ChainInFront(vt1[22], (void*)Hook_Present1, "Present1")) o_Present1 = (PFN_Present1)o;
+            else if (void* p = PatchVtable(sc1, 22, DetourFriendlyThunk((void*)Hook_Present1))) o_Present1 = (PFN_Present1)p;
             sc1->Release();
         }
         Log("Present hooks installed (Present=%p Present1=%p)", (void*)o_Present, (void*)o_Present1);

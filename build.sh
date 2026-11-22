@@ -17,7 +17,7 @@ out[-1] += ';'
 open('build/default_ini.h', 'w').write('\n'.join(out) + '\n')
 PY
 x86_64-w64-mingw32-g++ -std=c++17 -O2 -Wall -shared -static -s -Ibuild \
-    -o bin/d3d11.dll src/soravr.cpp src/xr.cpp d3d11.def \
+    -o bin/d3d11.dll src/soravr.cpp src/xr.cpp src/exports.cpp d3d11.def \
     -luuid -lole32
 cp dist/SoraVR.ini bin/SoraVR.default.ini
 cp README.md bin/README.md

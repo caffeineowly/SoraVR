@@ -5,6 +5,14 @@ Add a line under *Unreleased* with every fix or pull request (with its number an
 
 ## [Unreleased]
 
+### Fixed
+- Crash (and, with an intermediate fix, a freeze) on the first frame when the game is started from
+  Steam: the Steam overlay is then loaded before SoraVR and had already hooked Present. SoraVR now
+  chains its Present hook in front of an existing one instead of changing the swapchain vtable, so
+  both work. Starting from the game folder was not affected.
+- The proxy d3d11.dll now forwards all of the system d3d11.dll's exports, not only the two the game uses.
+- Controller physics is only enabled in `sora_1st.exe` (2nd Chapter's physics interface differs and crashed).
+
 ### Changed
 - Game code is now found by byte signatures instead of fixed addresses, so SoraVR works on game
   versions 1.06.1 and 1.07 (and should survive small updates). `tools/sigcheck.py` checks the
